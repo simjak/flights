@@ -90,7 +90,6 @@ async def make_request_with_retry(
     session: aiohttp.ClientSession,
     request_url: str,
     request_params: Dict[str, str],
-    cookies: Dict[str, str],
     max_retries: int = 3,
     initial_delay: float = 5.0,
 ) -> Response:
@@ -98,32 +97,19 @@ async def make_request_with_retry(
     last_error = None
     delay = initial_delay
 
-    # Configure compression
-    compression = aiohttp.ClientSession(
-        headers=random.choice(BROWSER_HEADERS),
-        cookies=cookies,
-        timeout=aiohttp.ClientTimeout(total=30),
-    )
-
     for attempt in range(max_retries):
         try:
-            async with compression as session:
-                async with session.get(
-                    request_url,
-                    params=request_params,
-                ) as response:
-                    text = await response.text()
-                    wrapped_response = Response(response, text)
-                    wrapped_response.raise_for_status()
+            # Reuse the existing session for all retries
+            async with session.get(request_url, params=request_params) as response:
+                text = await response.text()
+                wrapped_response = Response(response, text)
+                wrapped_response.raise_for_status()
 
-                    logger.info(
-                        f"response: {wrapped_response.url} {wrapped_response.status_code} {len(wrapped_response.text)}"
-                    )
+                logger.info(
+                    f"Response: {wrapped_response.url} {wrapped_response.status_code} {len(wrapped_response.text)}"
+                )
 
-                    # Add delay between requests
-                    await asyncio.sleep(delay)
-
-                    return wrapped_response
+                return wrapped_response
 
         except Exception as e:
             last_error = e
@@ -165,13 +151,23 @@ async def get_flights(
     # Add EU cookies if requested
     cookies = eu_cookies if inject_eu_cookies else {}
 
-    # Create aiohttp session with retry logic
-    async with aiohttp.ClientSession() as session:
+    # Configure client session with proper headers and cookies
+    headers = random.choice(BROWSER_HEADERS).copy()
+    # Ensure brotli compression is supported
+    headers["Accept-Encoding"] = "gzip, deflate, br"
+
+    session_kwargs = {
+        "headers": headers,
+        "cookies": cookies,
+        "timeout": aiohttp.ClientTimeout(total=30),
+    }
+
+    # Create a single session for all requests
+    async with aiohttp.ClientSession(**session_kwargs) as session:
         response = await make_request_with_retry(
             session,
             "https://www.google.com/travel/flights",
             params,
-            cookies,
         )
 
         # Parse HTML response

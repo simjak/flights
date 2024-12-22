@@ -88,15 +88,15 @@ search_progress = SearchProgress()
 # South Asian major airports
 SOUTH_ASIA_AIRPORTS = [
     "SIN",  # Singapore
-    # "BKK",  # Bangkok
-    # "KUL",  # Kuala Lumpur
-    # "CGK",  # Jakarta
-    # "MNL",  # Manila
-    # "SGN",  # Ho Chi Minh City
-    # "HAN",  # Hanoi
-    # "RGN",  # Yangon
-    # "PNH",  # Phnom Penh
-    # "DAD",  # Da Nang
+    "BKK",  # Bangkok
+    "KUL",  # Kuala Lumpur
+    "CGK",  # Jakarta
+    "MNL",  # Manila
+    "SGN",  # Ho Chi Minh City
+    "HAN",  # Hanoi
+    "RGN",  # Yangon
+    "PNH",  # Phnom Penh
+    "DAD",  # Da Nang
 ]
 
 SeatClass = Literal["economy", "premium-economy", "business", "first"]
@@ -647,14 +647,14 @@ async def search_flights(
 
 
 async def main_async():
-    departure_airports = ["VNO"]  # Vilnius only for testing
+    departure_airports = ["VNO", "RIX", "WAW"]  # Vilnius only for testing
 
     try:
         results = await search_flights(
             departure_airports=departure_airports,
-            start_date="2025-02-05",
-            end_date="2025-02-16",
-            min_duration_days=11,
+            start_date="2025-02-01",
+            end_date="2025-04-30",
+            min_duration_days=13,
             max_duration_days=30,
             max_price=700,
             max_stops=2,
