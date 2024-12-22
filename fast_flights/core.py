@@ -99,6 +99,7 @@ async def make_request_with_retry(
 
     for attempt in range(max_retries):
         try:
+            # Reuse the existing session for all retries
             async with session.get(request_url, params=request_params) as response:
                 text = await response.text()
                 wrapped_response = Response(response, text)
@@ -107,9 +108,6 @@ async def make_request_with_retry(
                 logger.info(
                     f"Response: {wrapped_response.url} {wrapped_response.status_code} {len(wrapped_response.text)}"
                 )
-
-                # Add delay between requests
-                await asyncio.sleep(delay)
 
                 return wrapped_response
 
@@ -154,8 +152,12 @@ async def get_flights(
     cookies = eu_cookies if inject_eu_cookies else {}
 
     # Configure client session with proper headers and cookies
+    headers = random.choice(BROWSER_HEADERS).copy()
+    # Ensure brotli compression is supported
+    headers["Accept-Encoding"] = "gzip, deflate, br"
+
     session_kwargs = {
-        "headers": random.choice(BROWSER_HEADERS),
+        "headers": headers,
         "cookies": cookies,
         "timeout": aiohttp.ClientTimeout(total=30),
     }
