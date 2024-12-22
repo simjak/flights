@@ -1,7 +1,10 @@
-from datetime import date
-from typing import List, Optional
+import logging
+from datetime import date, datetime, timedelta
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 class FlightSearchRequest(BaseModel):
@@ -19,7 +22,7 @@ class FlightSearchRequest(BaseModel):
     )
     start_date: date = Field(
         ...,
-        description="Start date for the search period",
+        description="Start date for the search period (must be at least 7 days in the future)",
         json_schema_extra={"examples": ["2025-02-01"]},
     )
     end_date: date = Field(
@@ -57,6 +60,19 @@ class FlightSearchRequest(BaseModel):
         le=5,
     )
 
+    @field_validator("start_date")
+    @classmethod
+    def validate_start_date(cls, v: date) -> date:
+        """Validate that start_date is at least 7 days in the future"""
+        today = datetime.now().date()
+        min_date = today + timedelta(days=7)
+        logger.info(f"Today: {today}, Min allowed date: {min_date}, Provided date: {v}")
+        if v < min_date:
+            raise ValueError(
+                f"Start date must be at least 7 days in the future (no earlier than {min_date})"
+            )
+        return v
+
     @field_validator("end_date")
     @classmethod
     def validate_dates(cls, v: date, info) -> date:
@@ -74,28 +90,75 @@ class FlightSearchRequest(BaseModel):
         return v
 
 
-class FlightResult(BaseModel):
-    """Model for a single flight result"""
+class SearchProgress(BaseModel):
+    """Model for tracking search progress."""
 
-    departure_airport: str = Field(description="Departure airport code")
-    destination_airport: str = Field(description="Destination airport code")
-    outbound_date: date = Field(description="Outbound flight date")
-    return_date: date = Field(description="Return flight date")
-    price: float = Field(description="Flight price in EUR")
-    airline: str = Field(description="Airline name")
-    stops: int = Field(description="Number of stops")
-    duration: str = Field(description="Flight duration")
-    current_price_indicator: str = Field(
-        description="Price indicator (low/typical/high)",
+    total_tasks: int = Field(default=0, description="Total number of search tasks")
+    completed_tasks: int = Field(default=0, description="Number of completed tasks")
+    found_flights: int = Field(default=0, description="Number of found flights")
+    best_price: Optional[float] = Field(
+        default=None, description="Best price found so far"
     )
+    current_searches: Dict[str, str] = Field(
+        default_factory=dict, description="Current active searches"
+    )
+
+    def add_current_search(self, task_id: str, description: str):
+        """Add a search task to the current searches."""
+        self.current_searches[task_id] = description
+
+    def remove_current_search(self, task_id: str):
+        """Remove a search task from the current searches."""
+        self.current_searches.pop(task_id, None)
+
+    def increment_found_flights(self):
+        """Increment the number of found flights."""
+        self.found_flights += 1
+
+    def increment_completed(self):
+        """Increment the number of completed tasks."""
+        self.completed_tasks += 1
+
+    def update_best_price(self, price: float):
+        """Update the best price if lower than current."""
+        if self.best_price is None or price < self.best_price:
+            self.best_price = price
+
+    class Config:
+        """Pydantic model configuration."""
+
+        from_attributes = True
+
+
+class FlightResult(BaseModel):
+    """Model for a single flight result."""
+
+    departure_airport: str
+    destination_airport: str
+    outbound_date: str
+    return_date: str
+    price: float
+    airline: str
+    stops: int
+    duration: str
+    current_price_indicator: str
+
+    class Config:
+        """Pydantic model configuration."""
+
+        from_attributes = True
 
 
 class FlightSearchResponse(BaseModel):
-    """Response model for flight search"""
+    """Model for flight search response."""
 
-    total_results: int = Field(description="Total number of flights found")
-    best_price: Optional[float] = Field(None, description="Best price found in EUR")
-    results: List[FlightResult] = Field(description="List of flight results")
-    search_status: str = Field(
-        description="Status of the search (completed/interrupted)",
-    )
+    total_results: int
+    best_price: Optional[float]
+    results: List[FlightResult]
+    search_status: str
+    progress: Optional[SearchProgress] = None
+
+    class Config:
+        """Pydantic model configuration."""
+
+        from_attributes = True
