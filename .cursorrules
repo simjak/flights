@@ -70,7 +70,6 @@ Backend:
 ## Testing
 - Write unit tests for utilities and components
 - Implement E2E tests for critical flows
-- Test across different Chrome versions
 - Test memory usage and performance
 
 ## Security

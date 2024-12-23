@@ -83,10 +83,10 @@ async def search_flight_combination(
                     destination_airports=[dest_airport],
                     start_date=outbound_date,
                     end_date=return_date,
-                    min_duration_days=params["min_duration_days"],
-                    max_duration_days=params["max_duration_days"],
-                    max_price=params["max_price"],
-                    max_stops=params["max_stops"],
+                    min_duration_days=params.get("min_duration_days", 13),
+                    max_duration_days=params.get("max_duration_days", 30),
+                    max_price=params.get("max_price", float("inf")),
+                    max_stops=params.get("max_stops"),
                     max_concurrent_searches=1,  # Use 1 since we're already parallelizing
                 )
 
@@ -117,7 +117,7 @@ async def search_flight_combination(
                         else float(flight["price"])
                     )
 
-                    if price <= params["max_price"]:
+                    if params.get("max_price") is None or price <= params["max_price"]:
                         flight_info = {
                             "departure_airport": dep_airport,
                             "destination_airport": dest_airport,
@@ -135,7 +135,7 @@ async def search_flight_combination(
 
                         # Update progress
                         search_progress.increment_found_flights()
-                        search_progress.update_best_price(price)
+                        search_progress.update_best_price(price, flight_info)
 
                         # Log new flight found
                         logger.info(
@@ -173,11 +173,6 @@ async def search_flight_combination(
         search_progress.increment_completed()
         search_progress.remove_current_search(task_id)
 
-        # Log progress
-        logger.info(
-            f"Progress: {search_progress.completed_tasks}/{search_progress.total_tasks} tasks completed, {search_progress.found_flights} flights found"
-        )
-
     return found_flights
 
 
@@ -190,6 +185,7 @@ async def search_flights_service(
     max_duration_days: Optional[int] = None,
     max_price: Optional[float] = None,
     max_stops: Optional[int] = None,
+    max_concurrent_searches: int = 3,
 ) -> FlightSearchResponse:
     """Search for flights based on given parameters."""
     try:
@@ -218,44 +214,64 @@ async def search_flights_service(
                 detail="Minimum duration cannot be greater than maximum duration",
             )
 
-        if (end_date - start_date).days < (min_duration_days or 0):
+        # Calculate the latest possible start date based on end_date and min_duration_days
+        latest_start_date = end_date - timedelta(days=min_duration_days or 13)
+        if start_date > latest_start_date:
             raise HTTPException(
                 status_code=400,
-                detail=f"Date range too short for minimum duration of {min_duration_days} days",
+                detail=f"Start date too late for minimum duration of {min_duration_days} days before end date",
             )
-
-        # Initialize progress tracking
-        progress = SearchProgress()
 
         # Generate date combinations
         date_range = generate_date_range(
             datetime.combine(start_date, datetime.min.time()),
-            datetime.combine(end_date, datetime.min.time()),
+            datetime.combine(latest_start_date, datetime.min.time()),
         )
-        total_combinations = (
-            len(departure_airports) * len(destination_airports or []) * len(date_range)
-        )
+
+        # Initialize progress tracking
+        progress = SearchProgress()
+
+        # Calculate total tasks before starting searches
+        total_combinations = len(departure_airports)
+        if destination_airports:
+            total_combinations *= len(destination_airports)
+        total_combinations *= len(date_range)
         progress.total_tasks = total_combinations
 
         results = []
         last_error = None
 
+        # Create semaphore for concurrent searches
+        semaphore = asyncio.Semaphore(max_concurrent_searches)
+
         # Search for each combination
-        for dep, dest in product(departure_airports, destination_airports or []):
-            for outbound_date in date_range:
+        async def search_with_semaphore(
+            dep: str, dest: str, outbound_date: str
+        ) -> None:
+            async with semaphore:
                 task_id = f"{dep}-{dest}-{outbound_date}"
                 task_desc = f"Searching {dep} to {dest} on {outbound_date}"
                 progress.add_current_search(task_id, task_desc)
 
                 try:
+                    # Calculate return date based on min_duration_days
+                    return_date = (
+                        datetime.strptime(outbound_date, "%Y-%m-%d")
+                        + timedelta(days=min_duration_days or 13)
+                    ).strftime("%Y-%m-%d")
+
+                    # Skip if return date would be after end_date
+                    if datetime.strptime(return_date, "%Y-%m-%d").date() > end_date:
+                        logger.debug(
+                            f"Skipping {outbound_date} as return date {return_date} would be after end date {end_date}"
+                        )
+                        return
+
                     flights = await search_flight_combination(
                         dep,
                         dest,
                         outbound_date,
-                        (
-                            datetime.strptime(outbound_date, "%Y-%m-%d")
-                            + timedelta(days=min_duration_days or 13)
-                        ).strftime("%Y-%m-%d"),
+                        return_date,
                         {
                             "max_price": max_price,
                             "min_duration_days": min_duration_days,
@@ -286,12 +302,37 @@ async def search_flights_service(
                         results.extend(flight_results)
                         progress.increment_found_flights()
                         min_price = min(float(f.price) for f in flight_results)
-                        progress.update_best_price(min_price)
+                        min_price_flight = next(
+                            f for f in flight_results if f.price == min_price
+                        )
+                        progress.update_best_price(
+                            min_price,
+                            {
+                                "departure_airport": min_price_flight.departure_airport,
+                                "destination_airport": min_price_flight.destination_airport,
+                                "outbound_date": min_price_flight.outbound_date,
+                                "return_date": min_price_flight.return_date,
+                                "airline": min_price_flight.airline,
+                                "stops": min_price_flight.stops,
+                                "duration": min_price_flight.duration,
+                                "current_price_indicator": min_price_flight.current_price_indicator,
+                            },
+                        )
                 except Exception as e:
+                    nonlocal last_error
                     last_error = e
                 finally:
                     progress.increment_completed()
                     progress.remove_current_search(task_id)
+
+        # Create tasks for all combinations
+        tasks = []
+        for dep, dest in product(departure_airports, destination_airports or []):
+            for outbound_date in date_range:
+                tasks.append(search_with_semaphore(dep, dest, outbound_date))
+
+        # Run all tasks concurrently
+        await asyncio.gather(*tasks)
 
         if not results and last_error:
             raise HTTPException(

@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: flights_user
+      POSTGRES_PASSWORD: flights_password
+      POSTGRES_DB: flights_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flights_user -d flights_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flights-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@flights.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - flights-network
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      - DB_HOST=postgres
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - flights-network
+    volumes:
+      - ./src:/app/src
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+networks:
+  flights-network:
+    driver: bridge
+
+volumes:
+  postgres_data:

@@ -1,6 +1,6 @@
 import logging
 from datetime import date, datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -99,6 +99,9 @@ class SearchProgress(BaseModel):
     best_price: Optional[float] = Field(
         default=None, description="Best price found so far"
     )
+    best_flight_details: Optional[Dict[str, Union[str, int]]] = Field(
+        default=None, description="Details of the flight with the best price"
+    )
     current_searches: Dict[str, str] = Field(
         default_factory=dict, description="Current active searches"
     )
@@ -114,15 +117,28 @@ class SearchProgress(BaseModel):
     def increment_found_flights(self):
         """Increment the number of found flights."""
         self.found_flights += 1
+        logger.info(f"Found flights: {self.found_flights}")
 
     def increment_completed(self):
         """Increment the number of completed tasks."""
         self.completed_tasks += 1
+        logger.info(
+            f"Progress: {self.completed_tasks}/{self.total_tasks} tasks completed, {self.found_flights} flights found"
+        )
 
-    def update_best_price(self, price: float):
+    def update_best_price(
+        self, price: float, flight_details: Dict[str, Union[str, int]]
+    ):
         """Update the best price if lower than current."""
         if self.best_price is None or price < self.best_price:
             self.best_price = price
+            self.best_flight_details = flight_details
+            logger.info(
+                f"New best price: €{self.best_price:.2f} - "
+                f"{flight_details['departure_airport']} → {flight_details['destination_airport']} "
+                f"({flight_details['outbound_date']} - {flight_details['return_date']}) "
+                f"with {flight_details['airline']}, {flight_details['stops']} stops"
+            )
 
     class Config:
         """Pydantic model configuration."""
