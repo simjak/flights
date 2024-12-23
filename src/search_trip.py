@@ -646,17 +646,17 @@ async def search_flights(
     return found_flights
 
 
-async def main_async():
-    departure_airports = ["VNO", "RIX", "WAW"]  # Vilnius only for testing
-
+async def test_search():
+    """Test flight search with specific parameters"""
     try:
         results = await search_flights(
-            departure_airports=departure_airports,
+            departure_airports=["VNO"],
+            destination_airports=["SIN"],
             start_date="2025-02-01",
-            end_date="2025-04-30",
-            min_duration_days=13,
-            max_duration_days=30,
-            max_price=700,
+            end_date="2025-02-15",
+            min_duration_days=14,
+            max_duration_days=14,
+            max_price=700.0,
             max_stops=2,
             max_concurrent_searches=3,
         )
@@ -668,21 +668,14 @@ async def main_async():
 
         print(f"\nFound {len(results)} flights matching your criteria:\n")
         for flight in results:
-            print(
-                f"Route: {flight['departure_airport']} → {flight['destination_airport']}"
-            )
+            print(f"Route: {flight['departure_airport']} → {flight['destination_airport']}")
             print(f"Dates: {flight['outbound_date']} - {flight['return_date']}")
-            print(
-                f"Price: €{flight['price']:.2f} ({flight['current_price_indicator']} price)"
-            )
+            print(f"Price: €{flight['price']:.2f} ({flight['current_price_indicator']} price)")
             print(f"Airline: {flight['airline']}")
             print(f"Stops: {flight['stops']}")
             print(f"Duration: {flight['duration']}")
             print("-" * 50)
 
-    except (KeyboardInterrupt, asyncio.CancelledError):
-        logger.info("\nSearch interrupted by user, cleaning up...")
-        return
     except Exception as e:
         logger.error(f"Search failed: {str(e)}")
         raise
@@ -691,7 +684,7 @@ async def main_async():
 def main():
     """Run the async main function"""
     try:
-        asyncio.run(main_async())
+        asyncio.run(test_search())
     except KeyboardInterrupt:
         logger.info("\nSearch cancelled.")
     except Exception as e:
