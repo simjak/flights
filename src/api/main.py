@@ -1,25 +1,32 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import flights
+from config import get_settings
+from api.routers import flights
+
+settings = get_settings()
 
 app = FastAPI(
-    title="Flight Search API",
-    description="API for searching and tracking flight prices",
-    version="1.0.0",
+    title=settings.API_TITLE,
+    description=settings.API_DESCRIPTION,
+    version=settings.API_VERSION,
 )
 
-# Configure CORS
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=settings.CORS_METHODS,
+    allow_headers=settings.CORS_HEADERS,
 )
 
 # Include routers
-app.include_router(flights.router, prefix="/api/v1")
+app.include_router(
+    flights.router,
+    prefix=settings.API_PREFIX,
+    tags=["flights"],
+)
 
 
 @app.get("/health")

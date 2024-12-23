@@ -1,5 +1,81 @@
 # Implementation Plan for Flight Search Service
 
+Today is 2024-12-23
+
+## Project Overview
+
+A Python-based Google Flights scraper that uses Protocol Buffers for data serialization.
+The package provides a fast and strongly-typed way to access Google Flights data by:
+
+- Generating Base64-encoded Protobuf strings for the tfs query parameter
+- Parsing HTML content to extract flight information
+- Providing strongly-typed interfaces for flight data handling
+
+## Architecture
+
+```mermaid
+graph TD
+    Client[Client] -->|HTTP Request| API[FastAPI Service]
+    API -->|Create Job| DB[(PostgreSQL)]
+    API -->|Enqueue Job| MQ[RabbitMQ]
+    MQ -->|Dequeue Job| Worker[Worker Service]
+    Worker -->|Update Status| DB
+    Worker -->|Store Results| DB
+    API -->|Get Results| DB
+
+    subgraph "API Service"
+        API_Models[Models]
+        API_Routes[Routes]
+        API_DB[DB Service]
+    end
+
+    subgraph "Worker Service"
+        Worker_Queue[Queue Manager]
+        Worker_Search[Flight Search]
+        Worker_State[State Manager]
+    end
+
+    classDef service fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef storage fill:#ff9,stroke:#333,stroke-width:2px;
+    class API,Worker service;
+    class DB,MQ storage;
+```
+
+### Key Components
+
+1. **API Service**
+   - FastAPI application handling HTTP requests
+   - Job creation and status updates
+   - Result retrieval and pagination
+   - Database session management
+
+2. **Worker Service**
+   - Background job processing
+   - Flight search implementation
+   - State management and checkpointing
+   - Rate limiting and error handling
+
+3. **PostgreSQL Database**
+   - Job and result storage
+   - Status tracking
+   - Data persistence
+   - Concurrent access handling
+
+4. **RabbitMQ Queue**
+   - Job distribution
+   - Worker coordination
+   - Message persistence
+   - Load balancing
+
+### Data Flow
+
+1. Client sends a flight search request to the API
+2. API creates a job record in PostgreSQL
+3. API enqueues the job in RabbitMQ
+4. Worker dequeues and processes the job
+5. Worker updates job status and stores results
+6. Client retrieves results through the API
+
 ## Phase 1: Development Environment Setup
 
 ### Project Structure
@@ -8,300 +84,344 @@
 flights/
 ├── docker/
 │   ├── postgres/
-│   │   └── init.sql
+│   │   └── init.sql         # Database initialization script
 │   └── api/
-│       └── Dockerfile
+│       └── Dockerfile       # API and worker Dockerfile
 ├── src/
 │   ├── api/
+│   │   ├── models/         # SQLAlchemy models
+│   │   │   ├── base.py
+│   │   │   ├── jobs.py
+│   │   │   └── flights.py
+│   │   ├── routers/        # API endpoints
+│   │   │   └── flights.py
+│   │   ├── db/            # Database layer
+│   │   │   └── session.py
+│   │   ├── config.py      # API configuration
+│   │   └── main.py        # FastAPI application
 │   ├── worker/
-│   └── frontend/
+│   │   ├── main.py        # Worker entry point
+│   │   └── queue.py       # RabbitMQ integration
+│   └── config.py          # Shared configuration
 ├── tests/
-├── alembic/
-│   ├── versions/
-│   └── alembic.ini
-├── docker-compose.yml
-├── .env
-├── .env.example
-├── pyproject.toml
-├── uv.lock
+├── docker-compose.yml      # Docker services configuration
+├── pyproject.toml         # Project dependencies
+├── uv.lock               # UV lock file
 └── README.md
 ```
 
-### Dependencies Management (pyproject.toml)
+### Dependencies
 
-```toml
-[project]
-name = "flights"
-version = "0.1.0"
-description = "Flight search service with background processing"
-readme = "README.md"
-requires-python = ">=3.12"
+- Python 3.12+
+- FastAPI for REST API
+- SQLAlchemy for database ORM
+- PostgreSQL for data storage
+- RabbitMQ for message queue
+- UV for package management
 
-dependencies = [
-    "fastapi==0.104.1",
-    "uvicorn==0.24.0",
-    "sqlalchemy==2.0.23",
-    "alembic==1.12.1",
-    "asyncpg==0.29.0",
-    "pydantic[email]==2.5.2",
-    "pydantic-settings==2.1.0",
-    "python-jose[cryptography]==3.3.0",
-    "python-multipart==0.0.6",
-]
+### Docker Services
 
-[dependency-groups]
-dev = [
-    "pytest==7.4.3",
-    "pytest-asyncio==0.21.1",
-    "pytest-cov==4.1.0",
-    "black==23.11.0",
-    "isort==5.12.0",
-    "mypy==1.7.1",
-    "ruff==0.1.6",
-]
+1. PostgreSQL (15-alpine)
+
+   - Persistent storage
+   - Initialization script for schema
+   - Health checks
+2. RabbitMQ (3-management-alpine)
+
+   - Message queue for job processing
+   - Management UI
+   - Health checks
+3. API Service
+
+   - FastAPI application
+   - Hot reload for development
+   - Environment variables for configuration
+   - Volume mount for code changes
+4. Worker Service
+
+   - Background job processor
+   - RabbitMQ consumer
+   - Shared codebase with API
+5. pgAdmin (optional)
+
+   - Database management UI
+   - Development tool
+
+## Phase 2: Database Schema
+
+### Enums
+
+```sql
+CREATE TYPE job_status AS ENUM (
+    'pending',
+    'running',
+    'completed',
+    'failed',
+    'cancelled'
+);
+
+CREATE TYPE price_indicator AS ENUM (
+    'low',
+    'typical',
+    'high'
+);
 ```
 
-### Docker Compose Configuration
+### Tables
 
-```yaml
-version: '3.8'
+```sql
+-- Jobs table
+CREATE TABLE jobs (
+    job_id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    departure_airports VARCHAR[] NOT NULL,
+    destination_airports VARCHAR[] NOT NULL,
+    outbound_dates TIMESTAMP[] NOT NULL,
+    return_dates TIMESTAMP[],
+    last_checkpoint TIMESTAMP,
+    status job_status NOT NULL DEFAULT 'pending',
+    total_combinations INTEGER NOT NULL DEFAULT 0,
+    processed_combinations INTEGER NOT NULL DEFAULT 0,
+    progress FLOAT NOT NULL DEFAULT 0.0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: flights_user
-      POSTGRES_PASSWORD: flights_password
-      POSTGRES_DB: flights_db
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U flights_user -d flights_db"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - flights-network
-
-  pgadmin:
-    image: dpage/pgadmin4:latest
-    environment:
-      PGADMIN_DEFAULT_EMAIL: admin@flights.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"
-    depends_on:
-      - postgres
-    networks:
-      - flights-network
-
-  api:
-    build:
-      context: .
-      dockerfile: docker/api/Dockerfile
-    environment:
-      - DB_HOST=postgres
-    env_file:
-      - .env
-    ports:
-      - "8000:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks:
-      - flights-network
-    volumes:
-      - ./src:/app/src
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-
-networks:
-  flights-network:
-    driver: bridge
-
-volumes:
-  postgres_data:
+-- Flight results table
+CREATE TABLE flight_results (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    job_id UUID NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+    departure_airport VARCHAR(3) NOT NULL,
+    destination_airport VARCHAR(3) NOT NULL,
+    outbound_date TIMESTAMP NOT NULL,
+    return_date TIMESTAMP,
+    price FLOAT NOT NULL,
+    airline VARCHAR(100) NOT NULL,
+    stops INTEGER NOT NULL,
+    duration VARCHAR(20) NOT NULL,
+    current_price_indicator price_indicator NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
-### Environment Variables
+### Indexes
 
-```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_USER=flights_user
-DB_PASSWORD=flights_password
-DB_NAME=flights_db
-DB_POOL_SIZE=5
-DB_MAX_OVERFLOW=10
-
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
-API_DEBUG=true
-API_CORS_ORIGINS=["http://localhost:3000"]
-API_WORKERS=4
-
-# Worker
-WORKER_CONCURRENCY=3
-MAX_RETRIES=3
-CHECKPOINT_INTERVAL=300  # 5 minutes in seconds
-WORKER_BATCH_SIZE=100
-
-# Security
-SECRET_KEY=your-secret-key-here
-ACCESS_TOKEN_EXPIRE_MINUTES=30
+```sql
+CREATE INDEX idx_flight_results_job_id ON flight_results(job_id);
+CREATE INDEX idx_flight_results_price ON flight_results(price);
+CREATE INDEX idx_jobs_status ON jobs(status);
 ```
 
-### Database Migration Setup (alembic.ini)
+## Phase 3: API Implementation
 
-```ini
-[alembic]
-script_location = alembic
-sqlalchemy.url = postgresql+asyncpg://%(DB_USER)s:%(DB_PASSWORD)s@%(DB_HOST)s:%(DB_PORT)s/%(DB_NAME)s
-
-[loggers]
-keys = root,sqlalchemy,alembic
-
-[handlers]
-keys = console
-
-[formatters]
-keys = generic
-
-[logger_root]
-level = WARN
-handlers = console
-qualname =
-
-[logger_sqlalchemy]
-level = WARN
-handlers =
-qualname = sqlalchemy.engine
-
-[logger_alembic]
-level = INFO
-handlers =
-qualname = alembic
-```
-
-### Phase 2: Database Layer Implementation
-
-### SQLAlchemy Models
+### Configuration
 
 ```python
-# jobs table
-class Job(Base):
-    job_id: str (UUID)
-    status: str (pending/running/completed/failed)
-    total_tasks: int
-    completed_tasks: int
-    found_flights: int
-    best_price: float
-    last_checkpoint: dict
-    created_at: datetime
-    updated_at: datetime
+class Settings(BaseSettings):
+    # Project settings
+    PROJECT_NAME: str = "Flight Search API"
+    VERSION: str = "0.1.0"
+    DEBUG: bool = False
 
-# results table
-class FlightResult(Base):
-    id: int
-    job_id: str (FK to jobs)
-    departure_airport: str
-    destination_airport: str
-    outbound_date: date
-    return_date: date
-    price: float
-    airline: str
-    stops: int
-    duration: str
-    current_price_indicator: str
+    # Database settings
+    DB_HOST: str
+    DB_PORT: int
+    DB_USER: str
+    DB_PASSWORD: str
+    DB_NAME: str
+    DB_POOL_SIZE: int
+    DB_MAX_OVERFLOW: int
+    DB_POOL_TIMEOUT: int
+
+    # API settings
+    API_HOST: str
+    API_PORT: int
+    API_DEBUG: bool
+    API_CORS_ORIGINS: list[str]
+    API_WORKERS: int
+    API_TITLE: str
+    API_DESCRIPTION: str
+    API_VERSION: str
+    API_PREFIX: str
+
+    # Worker settings
+    WORKER_CONCURRENCY: int
+    MAX_RETRIES: int
+    CHECKPOINT_INTERVAL: int
+    WORKER_BATCH_SIZE: int
+    WORKER_RATE_LIMIT: int
+    WORKER_TIME_WINDOW: int
+
+    # RabbitMQ settings
+    RABBITMQ_URL: str | None
+    RABBITMQ_QUEUE_NAME: str
+    RABBITMQ_EXCHANGE_NAME: str
+    RABBITMQ_ROUTING_KEY: str
+    RABBITMQ_PREFETCH_COUNT: int
 ```
 
-### Database Service Layer
+### Models
 
-- Job management functions (create/update/delete)
-- Result storage functions
-- State persistence functions
-- Progress tracking functions
+```python
+class Job(Base):
+    """Flight search job model."""
+    __tablename__ = "jobs"
 
-## Phase 3: Background Worker Implementation
+    # Required fields without defaults
+    departure_airports: Mapped[List[str]]
+    destination_airports: Mapped[List[str]]
+    outbound_dates: Mapped[List[datetime]]
 
-### Custom Asyncio Worker
+    # Optional fields
+    return_dates: Mapped[Optional[List[datetime]]]
+    last_checkpoint: Mapped[Optional[datetime]]
 
-1. Task queue management
-2. State persistence
-3. Progress tracking
-4. Error handling and recovery
-5. Concurrency control
+    # Fields with default values
+    job_id: Mapped[UUID]
+    status: Mapped[str]
+    total_combinations: Mapped[int]
+    processed_combinations: Mapped[int]
+    progress: Mapped[float]
+    created_at: Mapped[datetime]
+    updated_at: Mapped[datetime]
 
-### Checkpointing
+class FlightResult(Base):
+    """Flight search result model."""
+    __tablename__ = "flight_results"
 
-- Save search state periodically
-- Track completed combinations
-- Store best prices found
+    # Required fields without defaults
+    job_id: Mapped[UUID]
+    departure_airport: Mapped[str]
+    destination_airport: Mapped[str]
+    outbound_date: Mapped[datetime]
+    price: Mapped[float]
+    airline: Mapped[str]
+    stops: Mapped[int]
+    duration: Mapped[str]
+    current_price_indicator: Mapped[str]
 
-## Phase 4: Frontend Implementation (Next.js)
+    # Optional fields
+    return_date: Mapped[Optional[datetime]]
 
-### Pages
+    # Fields with default values
+    id: Mapped[UUID]
+    created_at: Mapped[datetime]
+```
 
-- Search form page
-- Results page with real-time updates
-- Flight details page
+## Phase 4: Worker Implementation
 
-### Components
+### Queue Integration
 
-- Search form with validation
-- Progress tracking component
-- Results display with sorting/filtering
-- Price trend indicators
+```python
+class RabbitMQ:
+    """RabbitMQ queue manager."""
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.connection = None
+        self.channel = None
 
-### API Integration
+    async def connect(self):
+        """Connect to RabbitMQ."""
+        if not self.settings.rabbitmq_url:
+            raise ValueError("RabbitMQ URL is not configured")
 
-- Search endpoint integration
-- Progress polling
-- Results fetching
+        self.connection = await aio_pika.connect_robust(
+            self.settings.rabbitmq_url
+        )
 
-## Phase 5: Testing and Documentation
+    async def setup(self):
+        """Set up exchanges and queues."""
+        exchange = await self.channel.declare_exchange(
+            self.settings.RABBITMQ_EXCHANGE_NAME,
+            aio_pika.ExchangeType.DIRECT,
+            durable=True,
+        )
 
-### Unit Tests
+        queue = await self.channel.declare_queue(
+            self.settings.RABBITMQ_QUEUE_NAME,
+            durable=True,
+        )
 
-- API endpoint tests
-- Database operation tests
-- Worker functionality tests
-- Frontend component tests
+        await queue.bind(
+            exchange,
+            routing_key=self.settings.RABBITMQ_ROUTING_KEY,
+        )
+```
 
-### Integration Tests
+### Worker Process
 
-- End-to-end search flow
-- Error handling scenarios
-- State recovery tests
+```python
+class Worker:
+    """Flight search worker."""
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.queue = RabbitMQ(settings)
+        self.db = Database(settings)
 
-### Documentation
+    async def start(self):
+        """Start the worker."""
+        await self.queue.connect()
+        await self.queue.setup()
+        await self.process_jobs()
 
-- API documentation
-- Setup instructions
-- Deployment guide
+    async def process_jobs(self):
+        """Process jobs from the queue."""
+        async with self.queue.channel.iterator() as iterator:
+            async for message in iterator:
+                async with message.process():
+                    job_id = message.body.decode()
+                    await self.process_job(job_id)
+```
 
-## Implementation Order
+### Flight Search Worker
 
-1. Database Layer (highest priority)
+- Converted `timedelta` to string before inserting into the database to match the schema requirements.
 
-   - Essential for state management
-   - Required by both API and worker
-2. Background Worker
+## Current Status
 
-   - Core functionality
-   - State management
-   - Error handling
-3. API Enhancements
+- [X] Project structure setup
+- [X] Docker environment configuration
+- [X] Database schema implementation
+- [X] SQLAlchemy models
+- [X] API configuration
+- [X] Basic API endpoints
+- [X] Worker implementation
+- [X] Job processing logic
+- [X] Database integration
+- [X] Queue integration
+- [ ] Flight search logic
+- [X] Basic error handling
+- [ ] Advanced error handling
+- [ ] Testing
+- [ ] Documentation
 
-   - Job management endpoints
-   - Progress tracking
-   - Results retrieval
-4. Frontend Development
+## Next Steps
 
-   - User interface
-   - Real-time updates
-   - Result visualization
+1. Implement flight search logic
+   - Google Flights scraping implementation
+   - Rate limiting and throttling
+   - Search optimization strategies
+   - Error recovery mechanisms
+
+2. Enhance error handling
+   - Detailed error logging
+   - Error categorization
+   - Retry strategies
+   - Circuit breakers
+
+3. Add comprehensive testing
+   - Unit tests for all components
+   - Integration tests for services
+   - End-to-end test scenarios
+   - Performance testing
+
+4. Complete documentation
+   - API documentation with examples
+   - Setup and deployment guides
+   - Development workflow
+   - Troubleshooting guide
+
+5. Add monitoring and observability
+   - Metrics collection
+   - Performance monitoring
+   - Error tracking
+   - Health checks

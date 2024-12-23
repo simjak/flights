@@ -1,22 +1,14 @@
-import uuid
-from datetime import datetime
+from datetime import datetime, date
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
+from uuid import UUID, uuid4
 
-from sqlalchemy import ForeignKey, String, text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import DateTime, Float, Integer, String, Date
+from sqlalchemy import Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base
-
-
-class JobStatus(str, Enum):
-    """Job status enum."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
 
 
 class PriceIndicator(str, Enum):
@@ -27,84 +19,82 @@ class PriceIndicator(str, Enum):
     HIGH = "high"
 
 
+class JobStatus(str, Enum):
+    """Job status enum."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class Job(Base):
-    """Job model for tracking search progress."""
+    """Flight search job model."""
 
     __tablename__ = "jobs"
 
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
-        server_default=text("uuid_generate_v4()"),
-        init=False,
-    )
-    status: Mapped[JobStatus] = mapped_column(
-        String(length=20),
-        default=JobStatus.PENDING,
-        nullable=False,
-    )
-    total_tasks: Mapped[int] = mapped_column(default=0, nullable=False)
-    completed_tasks: Mapped[int] = mapped_column(default=0, nullable=False)
-    found_flights: Mapped[int] = mapped_column(default=0, nullable=False)
-    best_price: Mapped[Optional[float]] = mapped_column(
+    # Required fields without defaults
+    departure_airports: Mapped[List[str]] = mapped_column(ARRAY(String))
+    destination_airports: Mapped[List[str]] = mapped_column(ARRAY(String))
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    min_duration_days: Mapped[int] = mapped_column(Integer, default=13)
+    max_duration_days: Mapped[int] = mapped_column(Integer, default=30)
+    max_price: Mapped[float] = mapped_column(Float, default=700.0)
+    max_stops: Mapped[int] = mapped_column(Integer, default=2)
+    max_concurrent_searches: Mapped[int] = mapped_column(Integer, default=3)
+
+    # Optional fields
+    last_checkpoint: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
         nullable=True,
         default=None,
-    )
-    last_checkpoint: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
-        nullable=True,
-        default=None,
-    )
-    created_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow,
-        server_default=text("CURRENT_TIMESTAMP"),
-        init=False,
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow,
-        server_default=text("CURRENT_TIMESTAMP"),
-        onupdate=datetime.utcnow,
-        init=False,
     )
 
-    results: Mapped[list["FlightResult"]] = relationship(
-        back_populates="job",
-        cascade="all, delete-orphan",
-        default_factory=list,
+    # Fields with default values
+    job_id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    status: Mapped[str] = mapped_column(
+        SQLEnum(JobStatus, values_callable=lambda x: [e.value for e in x]),
+        default=JobStatus.PENDING,
+    )
+    total_combinations: Mapped[int] = mapped_column(Integer, default=0)
+    processed_combinations: Mapped[int] = mapped_column(Integer, default=0)
+    progress: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
     )
 
 
 class FlightResult(Base):
-    """Flight result model for storing search results."""
+    """Flight search result model."""
 
     __tablename__ = "flight_results"
 
-    id: Mapped[int] = mapped_column(primary_key=True, init=False)
-    job_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("jobs.job_id", ondelete="CASCADE"),
-        nullable=False,
-    )
+    # Required fields without defaults
+    job_id: Mapped[UUID] = mapped_column(nullable=False)
     departure_airport: Mapped[str] = mapped_column(String(3), nullable=False)
     destination_airport: Mapped[str] = mapped_column(String(3), nullable=False)
-    outbound_date: Mapped[datetime] = mapped_column(nullable=False)
-    return_date: Mapped[datetime] = mapped_column(nullable=False)
-    price: Mapped[float] = mapped_column(nullable=False)
+    outbound_date: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    price: Mapped[float] = mapped_column(Float, nullable=False)
     airline: Mapped[str] = mapped_column(String(100), nullable=False)
-    stops: Mapped[int] = mapped_column(nullable=False)
-    duration: Mapped[str] = mapped_column(String(20), nullable=False)
-    current_price_indicator: Mapped[PriceIndicator] = mapped_column(
-        String(20),
+    stops: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration: Mapped[str] = mapped_column(String(20), nullable=False)  # Format: "HH:MM"
+    current_price_indicator: Mapped[str] = mapped_column(
+        SQLEnum(PriceIndicator),
         nullable=False,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        default=datetime.utcnow,
-        server_default=text("CURRENT_TIMESTAMP"),
-        init=False,
+
+    # Optional fields
+    return_date: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+        default=None,
     )
 
-    job: Mapped[Job] = relationship(
-        back_populates="results",
-        init=False,
-    )
+    # Fields with default values
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

@@ -28,7 +28,7 @@ class FlightSearchRequest(BaseModel):
     end_date: date = Field(
         ...,
         description="End date for the search period",
-        json_schema_extra={"examples": ["2025-04-30"]},
+        json_schema_extra={"examples": ["2025-02-15"]},
     )
     min_duration_days: int = Field(
         13,

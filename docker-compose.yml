@@ -2,18 +2,36 @@ version: "3.8"
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:15-alpine
     environment:
-      POSTGRES_USER: flights_user
-      POSTGRES_PASSWORD: flights_password
-      POSTGRES_DB: flights_db
+      POSTGRES_USER: flights
+      POSTGRES_PASSWORD: flights
+      POSTGRES_DB: flights
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U flights_user -d flights_db"]
+      test: ["CMD-SHELL", "pg_isready -U flights"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - flights-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672" # AMQP protocol port
+      - "15672:15672" # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: flights
+      RABBITMQ_DEFAULT_PASS: flights
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -21,9 +39,9 @@ services:
       - flights-network
 
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@flights.com
+      PGADMIN_DEFAULT_EMAIL: admin@flights.local
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
       - "5050:80"
@@ -37,19 +55,67 @@ services:
       context: .
       dockerfile: docker/api/Dockerfile
     environment:
-      - DB_HOST=postgres
-    env_file:
-      - .env
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: flights
+      DB_PASSWORD: flights
+      DB_NAME: flights
+      DB_POOL_SIZE: 5
+      DB_MAX_OVERFLOW: 10
+      DB_POOL_TIMEOUT: 30
+      DEBUG: "true"
+      API_PREFIX: /api/v1
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      API_DEBUG: "true"
+      API_WORKERS: 4
+      WORKER_CONCURRENCY: 5
+      WORKER_RATE_LIMIT: 60
+      WORKER_TIME_WINDOW: 60
+      WORKER_CHECKPOINT_INTERVAL: 300
+      RABBITMQ_URL: amqp://flights:flights@rabbitmq:5672/
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     networks:
       - flights-network
     volumes:
-      - ./src:/app/src
+      - .:/app
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: python -m src.worker.main
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: flights
+      DB_PASSWORD: flights
+      DB_NAME: flights
+      DB_POOL_SIZE: 5
+      DB_MAX_OVERFLOW: 10
+      DB_POOL_TIMEOUT: 30
+      DEBUG: "true"
+      WORKER_CONCURRENCY: 5
+      WORKER_RATE_LIMIT: 60
+      WORKER_TIME_WINDOW: 60
+      WORKER_CHECKPOINT_INTERVAL: 300
+      RABBITMQ_URL: amqp://flights:flights@rabbitmq:5672/
+    volumes:
+      - .:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - flights-network
 
 networks:
   flights-network:
@@ -57,3 +123,4 @@ networks:
 
 volumes:
   postgres_data:
+  rabbitmq_data:

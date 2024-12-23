@@ -1,34 +1,43 @@
-.PHONY: setup migrate test lint run clean
+.PHONY: setup build run test lint format clean
 
-setup:
-	curl -LsSf https://astral.sh/uv/install.sh | sh
-	uv venv
-	uv pip sync
-	alembic upgrade head
+setup: ## Setup development environment
+	@echo "Setting up development environment..."
+	@curl -LsSf https://astral.sh/uv/install.sh | sh
+	@uv venv
+	@. .venv/bin/activate && uv pip install -e .
 
-migrate:
-	alembic revision --autogenerate -m "$(message)"
-	alembic upgrade head
+build: ## Build Docker images
+	@echo "Building Docker images..."
+	@docker-compose build
 
-test:
-	uv pip sync --group dev
-	pytest tests/ -v --cov=src
+run: ## Run services
+	@echo "Starting services..."
+	@docker-compose up -d
 
-lint:
-	uv pip sync --group dev
-	black .
-	isort .
-	ruff check .
-	mypy src/
+test: ## Run tests
+	@echo "Running tests..."
+	@. .venv/bin/activate && uv pip install pytest pytest-asyncio pytest-cov
+	@. .venv/bin/activate && pytest tests/ -v --cov=src
 
-run:
-	docker-compose up --build
+lint: ## Run linters
+	@echo "Running linters..."
+	@. .venv/bin/activate && uv pip install ruff mypy
+	@. .venv/bin/activate && ruff check src/
+	@. .venv/bin/activate && mypy src/
 
-clean:
-	docker-compose down -v
-	find . -type d -name "__pycache__" -exec rm -r {} +
-	find . -type d -name "*.egg-info" -exec rm -r {} +
-	find . -type d -name ".pytest_cache" -exec rm -r {} +
-	find . -type d -name ".ruff_cache" -exec rm -r {} +
-	find . -type d -name ".mypy_cache" -exec rm -r {} +
-	rm -rf .venv/
+format: ## Format code
+	@echo "Formatting code..."
+	@. .venv/bin/activate && uv pip install ruff
+	@. .venv/bin/activate && ruff format src/
+
+clean: ## Clean up
+	@echo "Cleaning up..."
+	@docker-compose down -v
+	@rm -rf .pytest_cache .coverage .mypy_cache .ruff_cache .venv
+	@find . -type d -name "__pycache__" -exec rm -r {} +
+
+help: ## Show this help
+	@echo "Available commands:"
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
+
+.DEFAULT_GOAL := help

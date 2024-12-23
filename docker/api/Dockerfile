@@ -1,59 +1,32 @@
-ARG DOCKER_BUILDKIT=1
+# syntax=docker/dockerfile:1
+FROM python:3.12-slim
 
-FROM python:3.12-slim AS build
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
-ENV PATH="/root/.local/bin/:$PATH" \
-    PYTHONFAULTHANDLER=1 \
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONHASHSEED=random \
-    PIP_NO_CACHE_DIR=off \
-    PIP_DISABLE_PIP_VERSION_CHECK=on \
-    PIP_DEFAULT_TIMEOUT=100 \
-    PIP_ROOT_USER_ACTION=ignore \
-    LANG=C.UTF-8 \
-    UV_LINK_MODE=copy \
-    UV_COMPILE_BYTECODE=1 \
-    UV_PYTHON_DOWNLOADS=never \
-    UV_PYTHON=python3.12 \
-    UV_PROJECT_ENVIRONMENT="/usr/local/"
+    PATH="/usr/local/bin:$PATH" \
+    PYTHONPATH="/app/src:$PYTHONPATH"
 
-# Install system dependencies and UV
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-    curl \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -LsSf https://astral.sh/uv/install.sh | sh
-
+# Set working directory
 WORKDIR /app
 
-# Copy project configuration
-COPY pyproject.toml uv.lock ./
+# Copy pyproject.toml first for better caching
+COPY pyproject.toml ./
 
-# Install dependencies using UV
+# Install dependencies without installing the project
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    uv sync --frozen --no-install-project --no-dev
+    uv pip install --system --no-deps -r pyproject.toml
 
-# Copy source code
+# Copy the project into the image
 COPY src ./src
+COPY README.md ./
 
-# Install project in development mode
+# Install project in editable mode
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
-
-#####################################################################
-
-FROM build AS runtime
-
-COPY --from=build /app /app
-COPY --from=build /usr/local /usr/local
-
-ENV PATH="/usr/local/bin:$PATH"
-
-WORKDIR /app
+    uv pip install --system -e .
 
 # Run the application
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

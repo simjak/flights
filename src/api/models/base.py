@@ -1,8 +1,8 @@
 from sqlalchemy.ext.asyncio import AsyncAttrs
-from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass
+from sqlalchemy.orm import DeclarativeBase
 
 
-class Base(AsyncAttrs, DeclarativeBase, MappedAsDataclass):
+class Base(AsyncAttrs, DeclarativeBase):
     """Base class for all SQLAlchemy models."""
 
     pass
